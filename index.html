@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>WxC Manager — Webex Calling provisioning</title>
+  <meta name="description" content="Manage and provision Webex Calling users, devices, locations, and numbers." />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23081a2b'/%3E%3Cpath d='M8 20c4-8 12-8 16 0' fill='none' stroke='%232ec4b6' stroke-width='2.4' stroke-linecap='round'/%3E%3Ccircle cx='16' cy='12' r='3.2' fill='%232ec4b6'/%3E%3C/svg%3E" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/app.css" />
+</head>
+<body>
+  <div id="login-screen" class="login-screen" hidden>
+    <div class="login-panel">
+      <div class="login-brand">
+        <div class="logo-mark" aria-hidden="true"></div>
+        <div>
+          <h1>WxC Manager</h1>
+          <p>Webex Calling user &amp; device provisioning</p>
+        </div>
+      </div>
+
+      <ol class="token-steps">
+        <li>Sign in to the <a href="https://developer.webex.com/admin/docs/getting-your-personal-access-token" target="_blank" rel="noopener">Webex Developer Portal</a> as an administrator.</li>
+        <li>Copy your personal access token from the Bearer field. Tokens expire 12 hours after login.</li>
+        <li>Paste it below. It is stored only in this browser tab and sent to <code>webexapis.com</code>.</li>
+      </ol>
+
+      <form id="login-form" class="login-form">
+        <label for="token-input">Personal access token</label>
+        <textarea id="token-input" name="token" rows="4" autocomplete="off" spellcheck="false" placeholder="Paste Bearer token" required></textarea>
+        <div class="login-actions">
+          <a class="btn btn-ghost" href="https://developer.webex.com/admin/docs/getting-your-personal-access-token" target="_blank" rel="noopener">Get token</a>
+          <button type="submit" class="btn btn-primary" id="login-submit">Connect</button>
+        </div>
+        <p id="login-error" class="form-error" hidden></p>
+        <p class="fine-print">Personal tokens are for development. Production apps should use a Webex Integration and OAuth. You need a full or calling administrator role in the target org.</p>
+      </form>
+    </div>
+  </div>
+
+  <div id="app" class="app" hidden>
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <div class="logo-mark" aria-hidden="true"></div>
+        <div>
+          <strong>WxC Manager</strong>
+          <span id="org-label">Not connected</span>
+        </div>
+      </div>
+
+      <nav class="nav" aria-label="Primary">
+        <a href="#/dashboard" data-route="dashboard">Dashboard</a>
+        <a href="#/users" data-route="users">Users</a>
+        <a href="#/devices" data-route="devices">Devices</a>
+        <a href="#/locations" data-route="locations">Locations</a>
+        <a href="#/numbers" data-route="numbers">Numbers</a>
+        <a href="#/workspaces" data-route="workspaces">Workspaces</a>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div id="session-meta" class="session-meta"></div>
+        <button type="button" class="btn btn-ghost btn-block" id="open-log">API activity</button>
+        <button type="button" class="btn btn-ghost btn-block" id="disconnect">Disconnect</button>
+      </div>
+    </aside>
+
+    <div class="main-wrap">
+      <header class="topbar">
+        <button type="button" class="icon-btn menu-toggle" id="menu-toggle" aria-label="Open menu">☰</button>
+        <h2 id="page-title">Dashboard</h2>
+        <div id="topbar-actions" class="topbar-actions"></div>
+      </header>
+      <main id="content" class="content"></main>
+    </div>
+  </div>
+
+  <div id="modal-root" class="modal-root" hidden></div>
+  <div id="toast-root" class="toast-root" aria-live="polite"></div>
+
+  <aside id="log-drawer" class="log-drawer" hidden>
+    <div class="log-header">
+      <h3>API activity</h3>
+      <div>
+        <button type="button" class="btn btn-ghost" id="clear-log">Clear</button>
+        <button type="button" class="icon-btn" id="close-log" aria-label="Close">✕</button>
+      </div>
+    </div>
+    <pre id="log-body" class="log-body"></pre>
+  </aside>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
