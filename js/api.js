@@ -120,58 +120,23 @@ export function createClient(getToken) {
   const patch = (path, body, query) => request("PATCH", path, { body, query });
   const del = (path, query) => request("DELETE", path, { query });
 
-  async function paginate({ getPage, startQuery, pageSize = 1000, onProgress, maxPages = 250 }) {
-    const all = [];
-    const seen = new Set();
-    let next = null;
-
-    for (let page = 0; page < maxPages; page += 1) {
-      let res;
-      if (next) res = await getPage(next);
-      else if (page === 0) res = await getPage(null);
-      else if (startQuery) res = await startQuery(all.length + 1);
-      else break;
-
-      const batch = res.data?.items || res.data?.phoneNumbers || [];
-      let added = 0;
-      for (const item of batch) {
-        const id = item.id || item.phoneNumber || JSON.stringify(item);
-        if (seen.has(id)) continue;
-        seen.add(id);
-        all.push(item);
-        added += 1;
-      }
-      onProgress?.({ page: page + 1, loaded: all.length });
-
-      if (res.links?.next) {
-        next = res.links.next;
-        continue;
-      }
-      next = null;
-      if (batch.length < pageSize || added === 0) break;
-    }
-    return all;
-  }
-
   return {
     request,
     me: () => get("/people/me"),
     listPeople: (query) => get("/people", { max: 100, callingData: true, ...query }),
-    listPeopleAll: async (query = {}, onProgress) => {
-      const { max, ...rest } = query;
-      const run = (pageSize) =>
-        paginate({
-          getPage: (next) => (next ? request("GET", next) : get("/people", { max: pageSize, callingData: true, ...rest })),
-          pageSize,
-          startQuery: (startIndex) => get("/people", { max: pageSize, callingData: true, ...rest, startIndex }),
-          onProgress,
-        });
-      try {
-        return await run(Math.min(Number(max) || 1000, 1000));
-      } catch (err) {
-        if (String(err.message).includes("max")) return run(100);
-        throw err;
-      }
+    listPeoplePage: async (query = {}) => {
+      const { nextUrl, startIndex, max, ...rest } = query;
+      const pageSize = Math.min(Number(max) || 100, 1000);
+      const res = nextUrl
+        ? await request("GET", nextUrl)
+        : await get("/people", {
+            max: pageSize,
+            callingData: true,
+            ...rest,
+            ...(startIndex > 1 ? { startIndex } : {}),
+          });
+      const items = res.data?.items || [];
+      return { items, next: res.links?.next || null, pageSize };
     },
     getPerson: (id) => get(`/people/${id}`, { callingData: true }),
     createPerson: (body) => post("/people", body, { callingData: true }),

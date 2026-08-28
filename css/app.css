@@ -273,7 +273,15 @@ input:focus, select:focus, textarea:focus {
 .toolbar input, .toolbar select { min-width: 180px; }
 .toolbar .spacer { flex: 1; }
 
-.table-wrap { overflow: auto; border: 1px solid var(--line); border-radius: 12px; }
+.table-wrap.lazy-scroll {
+  max-height: calc(100vh - 220px);
+}
+.lazy-sentinel {
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 16px 12px;
+}
 table { width: 100%; border-collapse: collapse; font-size: 14px; }
 th, td { padding: 12px 14px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
 th {

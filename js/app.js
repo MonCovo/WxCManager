@@ -38,8 +38,9 @@ const state = {
   },
   snapshot: {},
   usersList: [],
-  userPage: 1,
-  userPageSize: 100,
+  usersNext: null,
+  usersHasMore: false,
+  usersQuery: {},
   cache: {},
 };
 
@@ -78,7 +79,9 @@ function clearOrgData() {
   state.fetched = { locations: false, licenses: false, supportedDevices: false };
   state.snapshot = {};
   state.usersList = [];
-  state.userPage = 1;
+  state.usersNext = null;
+  state.usersHasMore = false;
+  state.usersQuery = {};
 }
 
 function setOrg(orgId, orgName) {
@@ -425,12 +428,19 @@ async function getDataset(key, content) {
   if (status) status.textContent = "Requesting…";
   try {
     if (key === "users") {
-      const items = await api.listPeopleAll({ orgId: state.orgId }, (progress) => {
-        if (status) status.textContent = `Loading page ${progress.page} · ${progress.loaded} users…`;
-      });
-      state.usersList = items;
-      state.userPage = 1;
-      setSnapshot("users", items.length);
+      const page = await api.listPeoplePage({ orgId: state.orgId });
+      state.usersList = page.items;
+      state.usersNext = page.next;
+      state.usersHasMore = Boolean(page.next) || page.items.length >= page.pageSize;
+      state.usersQuery = { orgId: state.orgId };
+      setSnapshot("users", page.items.length);
+      if (status) {
+        status.textContent = state.usersHasMore
+          ? `${page.items.length} loaded · more on Users`
+          : snapshotLabel("users");
+      }
+      toast(`Loaded ${key}`);
+      return;
     } else if (key === "devices") {
       const { data } = await api.listDevices({ orgId: state.orgId, max: 100 });
       setSnapshot("devices", (data.items || []).length);
@@ -470,56 +480,117 @@ async function renderUsers(content, actions) {
     <div id="user-table"></div>
   `;
 
+  let observer = null;
+  const disconnect = () => {
+    observer?.disconnect();
+    observer = null;
+  };
+
+  const userRow = (p) => `
+    <tr class="row-link" data-id="${escapeHtml(p.id)}">
+      <td>${escapeHtml(p.displayName)}</td>
+      <td>${escapeHtml(p.emails?.[0] || "")}</td>
+      <td>${escapeHtml(locationName(state.locations, p.locationId))}</td>
+      <td class="mono">${escapeHtml(personNumber(p))}</td>
+      <td>${p.invitePending ? badge("Invite pending", "warn") : p.loginEnabled === false ? badge("Disabled", "danger") : badge("Active", "ok")}</td>
+    </tr>`;
+
+  const bindRows = (root) => {
+    root.querySelectorAll("tr[data-id]").forEach((row) => {
+      row.addEventListener("click", () => go(`#/user/${encodeURIComponent(row.dataset.id)}`));
+    });
+  };
+
+  const updateCount = () => {
+    const el = document.getElementById("user-count");
+    if (!el) return;
+    if (!state.usersList.length) {
+      el.textContent = "";
+      return;
+    }
+    el.textContent = state.usersHasMore
+      ? `${state.usersList.length} loaded · scroll for more`
+      : `${state.usersList.length} loaded`;
+  };
+
+  const bindSentinel = () => {
+    disconnect();
+    const sentinel = document.getElementById("user-sentinel");
+    const scroller = document.getElementById("user-scroll");
+    if (!sentinel || !scroller || !state.usersHasMore) return;
+    observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        loadMore().catch((err) => toast(err.message, "error"));
+      }
+    }, { root: scroller, rootMargin: "160px" });
+    observer.observe(sentinel);
+  };
+
   const paint = () => {
     const items = state.usersList;
-    const size = state.userPageSize;
-    const pages = Math.max(1, Math.ceil(items.length / size));
-    if (state.userPage > pages) state.userPage = pages;
-    const page = state.userPage;
-    const start = (page - 1) * size;
-    const slice = items.slice(start, start + size);
-    document.getElementById("user-count").textContent = items.length
-      ? `${start + 1}–${start + slice.length} of ${items.length}`
-      : "";
+    updateCount();
     if (!items.length) {
+      disconnect();
       document.getElementById("user-table").innerHTML = idleGet(
         "Users not loaded",
-        "Get walks every People API page so you can browse the full org, 100 users at a time.",
+        "Get the first page immediately. More users load as you scroll.",
         "user-get",
       );
       document.getElementById("user-get")?.addEventListener("click", () => load().catch((e) => toast(e.message, "error")));
       return;
     }
     document.getElementById("user-table").innerHTML = `
-      <div class="table-wrap"><table>
-        <thead><tr><th>Name</th><th>Email</th><th>Location</th><th>Number</th><th>Status</th></tr></thead>
-        <tbody>
-          ${slice.map((p) => `
-            <tr class="row-link" data-id="${escapeHtml(p.id)}">
-              <td>${escapeHtml(p.displayName)}</td>
-              <td>${escapeHtml(p.emails?.[0] || "")}</td>
-              <td>${escapeHtml(locationName(state.locations, p.locationId))}</td>
-              <td class="mono">${escapeHtml(personNumber(p))}</td>
-              <td>${p.invitePending ? badge("Invite pending", "warn") : p.loginEnabled === false ? badge("Disabled", "danger") : badge("Active", "ok")}</td>
-            </tr>`).join("")}
-        </tbody>
-      </table></div>
-      <div class="pager">
-        <button type="button" class="btn" id="user-prev" ${page <= 1 ? "disabled" : ""}>Previous</button>
-        <span>Page ${page} of ${pages}</span>
-        <button type="button" class="btn" id="user-next" ${page >= pages ? "disabled" : ""}>Next</button>
+      <div class="table-wrap lazy-scroll" id="user-scroll">
+        <table>
+          <thead><tr><th>Name</th><th>Email</th><th>Location</th><th>Number</th><th>Status</th></tr></thead>
+          <tbody id="user-body">${items.map(userRow).join("")}</tbody>
+        </table>
+        <div class="lazy-sentinel" id="user-sentinel">${state.usersHasMore ? "Scroll to load more" : "All loaded users are shown"}</div>
       </div>`;
-    document.querySelectorAll("#user-table tr[data-id]").forEach((row) => {
-      row.addEventListener("click", () => go(`#/user/${encodeURIComponent(row.dataset.id)}`));
-    });
-    document.getElementById("user-prev")?.addEventListener("click", () => {
-      state.userPage -= 1;
-      paint();
-    });
-    document.getElementById("user-next")?.addEventListener("click", () => {
-      state.userPage += 1;
-      paint();
-    });
+    bindRows(document.getElementById("user-table"));
+    bindSentinel();
+  };
+
+  const mergeUsers = (batch) => {
+    const seen = new Set(state.usersList.map((u) => u.id));
+    let added = 0;
+    for (const person of batch) {
+      if (!person.id || seen.has(person.id)) continue;
+      seen.add(person.id);
+      state.usersList.push(person);
+      added += 1;
+    }
+    return added;
+  };
+
+  const loadMore = async () => {
+    if (!state.usersHasMore || state.usersLoadingMore) return;
+    state.usersLoadingMore = true;
+    const sentinel = document.getElementById("user-sentinel");
+    if (sentinel) sentinel.textContent = "Loading more…";
+    try {
+      const page = await api.listPeoplePage({
+        ...state.usersQuery,
+        nextUrl: state.usersNext,
+        startIndex: state.usersNext ? undefined : state.usersList.length + 1,
+      });
+      const before = state.usersList.length;
+      const added = mergeUsers(page.items);
+      state.usersNext = page.next;
+      state.usersHasMore = Boolean(page.next) || (added > 0 && page.items.length >= page.pageSize);
+      setSnapshot("users", state.usersList.length);
+      const tbody = document.getElementById("user-body");
+      if (tbody && added) {
+        const extra = state.usersList.slice(before);
+        extra.forEach((p) => tbody.insertAdjacentHTML("beforeend", userRow(p)));
+        bindRows(tbody);
+      }
+      updateCount();
+      if (sentinel) sentinel.textContent = state.usersHasMore ? "Scroll to load more" : "All loaded users are shown";
+      if (!state.usersHasMore) disconnect();
+    } finally {
+      state.usersLoadingMore = false;
+    }
   };
 
   const load = async () => {
@@ -529,17 +600,18 @@ async function renderUsers(content, actions) {
     if (q.includes("@")) query.email = q;
     else if (q) query.displayName = q;
     if (locationId) query.locationId = locationId;
-    document.getElementById("user-table").innerHTML = spinner("Loading users…");
+    state.usersQuery = query;
+    state.usersNext = null;
+    state.usersHasMore = true;
+    document.getElementById("user-table").innerHTML = spinner("Loading first page…");
     document.getElementById("user-count").textContent = "";
-    const items = await api.listPeopleAll(query, ({ page, loaded }) => {
-      const el = document.getElementById("user-count");
-      if (el) el.textContent = `Loading page ${page} · ${loaded} users…`;
-    });
-    state.usersList = items;
-    state.userPage = 1;
-    setSnapshot("users", items.length);
-    if (!items.length) {
-      document.getElementById("user-count").textContent = "";
+    const page = await api.listPeoplePage(query);
+    state.usersList = [];
+    mergeUsers(page.items);
+    state.usersNext = page.next;
+    state.usersHasMore = Boolean(page.next) || page.items.length >= page.pageSize;
+    setSnapshot("users", state.usersList.length);
+    if (!state.usersList.length) {
       document.getElementById("user-table").innerHTML = emptyState("No users", "Try a different search, or provision a new calling user.");
       return;
     }
