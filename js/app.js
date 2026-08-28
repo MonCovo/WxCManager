@@ -1146,6 +1146,8 @@ async function renderNumbers(content, actions) {
     });
   };
 }
+
+async function renderWorkspaces(content, actions) {
   actions.innerHTML = `<button class="btn btn-primary" id="create-ws">Create workspace</button>`;
   content.innerHTML = `
     <div class="toolbar">
