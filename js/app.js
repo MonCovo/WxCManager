@@ -37,6 +37,9 @@ const state = {
     supportedDevices: false,
   },
   snapshot: {},
+  usersList: [],
+  userPage: 1,
+  userPageSize: 100,
   cache: {},
 };
 
@@ -74,6 +77,8 @@ function clearOrgData() {
   state.supportedDevices = [];
   state.fetched = { locations: false, licenses: false, supportedDevices: false };
   state.snapshot = {};
+  state.usersList = [];
+  state.userPage = 1;
 }
 
 function setOrg(orgId, orgName) {
@@ -420,8 +425,12 @@ async function getDataset(key, content) {
   if (status) status.textContent = "Requesting…";
   try {
     if (key === "users") {
-      const { data } = await api.listPeople({ orgId: state.orgId, max: 100, callingData: true });
-      setSnapshot("users", (data.items || []).length);
+      const items = await api.listPeopleAll({ orgId: state.orgId }, (progress) => {
+        if (status) status.textContent = `Loading page ${progress.page} · ${progress.loaded} users…`;
+      });
+      state.usersList = items;
+      state.userPage = 1;
+      setSnapshot("users", items.length);
     } else if (key === "devices") {
       const { data } = await api.listDevices({ orgId: state.orgId, max: 100 });
       setSnapshot("devices", (data.items || []).length);
@@ -458,30 +467,34 @@ async function renderUsers(content, actions) {
       <span class="spacer"></span>
       <span class="muted" id="user-count"></span>
     </div>
-    <div id="user-table">${idleGet("Users not loaded", "Nothing is requested until you click Get. Optional search filters apply to that request.", "user-get")}</div>
+    <div id="user-table"></div>
   `;
 
-  const load = async () => {
-    const q = document.getElementById("user-search").value.trim();
-    const locationId = document.getElementById("user-location").value;
-    const query = { orgId: state.orgId, max: 100, callingData: true };
-    if (q.includes("@")) query.email = q;
-    else if (q) query.displayName = q;
-    if (locationId) query.locationId = locationId;
-    document.getElementById("user-table").innerHTML = spinner();
-    const { data } = await api.listPeople(query);
-    const items = data.items || [];
-    setSnapshot("users", items.length);
-    document.getElementById("user-count").textContent = `${items.length} shown`;
+  const paint = () => {
+    const items = state.usersList;
+    const size = state.userPageSize;
+    const pages = Math.max(1, Math.ceil(items.length / size));
+    if (state.userPage > pages) state.userPage = pages;
+    const page = state.userPage;
+    const start = (page - 1) * size;
+    const slice = items.slice(start, start + size);
+    document.getElementById("user-count").textContent = items.length
+      ? `${start + 1}–${start + slice.length} of ${items.length}`
+      : "";
     if (!items.length) {
-      document.getElementById("user-table").innerHTML = emptyState("No users", "Try a different search, or provision a new calling user.");
+      document.getElementById("user-table").innerHTML = idleGet(
+        "Users not loaded",
+        "Get walks every People API page so you can browse the full org, 100 users at a time.",
+        "user-get",
+      );
+      document.getElementById("user-get")?.addEventListener("click", () => load().catch((e) => toast(e.message, "error")));
       return;
     }
     document.getElementById("user-table").innerHTML = `
       <div class="table-wrap"><table>
         <thead><tr><th>Name</th><th>Email</th><th>Location</th><th>Number</th><th>Status</th></tr></thead>
         <tbody>
-          ${items.map((p) => `
+          ${slice.map((p) => `
             <tr class="row-link" data-id="${escapeHtml(p.id)}">
               <td>${escapeHtml(p.displayName)}</td>
               <td>${escapeHtml(p.emails?.[0] || "")}</td>
@@ -490,14 +503,51 @@ async function renderUsers(content, actions) {
               <td>${p.invitePending ? badge("Invite pending", "warn") : p.loginEnabled === false ? badge("Disabled", "danger") : badge("Active", "ok")}</td>
             </tr>`).join("")}
         </tbody>
-      </table></div>`;
+      </table></div>
+      <div class="pager">
+        <button type="button" class="btn" id="user-prev" ${page <= 1 ? "disabled" : ""}>Previous</button>
+        <span>Page ${page} of ${pages}</span>
+        <button type="button" class="btn" id="user-next" ${page >= pages ? "disabled" : ""}>Next</button>
+      </div>`;
     document.querySelectorAll("#user-table tr[data-id]").forEach((row) => {
       row.addEventListener("click", () => go(`#/user/${encodeURIComponent(row.dataset.id)}`));
     });
+    document.getElementById("user-prev")?.addEventListener("click", () => {
+      state.userPage -= 1;
+      paint();
+    });
+    document.getElementById("user-next")?.addEventListener("click", () => {
+      state.userPage += 1;
+      paint();
+    });
   };
 
+  const load = async () => {
+    const q = document.getElementById("user-search").value.trim();
+    const locationId = document.getElementById("user-location").value;
+    const query = { orgId: state.orgId };
+    if (q.includes("@")) query.email = q;
+    else if (q) query.displayName = q;
+    if (locationId) query.locationId = locationId;
+    document.getElementById("user-table").innerHTML = spinner("Loading users…");
+    document.getElementById("user-count").textContent = "";
+    const items = await api.listPeopleAll(query, ({ page, loaded }) => {
+      const el = document.getElementById("user-count");
+      if (el) el.textContent = `Loading page ${page} · ${loaded} users…`;
+    });
+    state.usersList = items;
+    state.userPage = 1;
+    setSnapshot("users", items.length);
+    if (!items.length) {
+      document.getElementById("user-count").textContent = "";
+      document.getElementById("user-table").innerHTML = emptyState("No users", "Try a different search, or provision a new calling user.");
+      return;
+    }
+    paint();
+  };
+
+  paint();
   document.getElementById("user-go").onclick = () => load().catch((e) => toast(e.message, "error"));
-  document.getElementById("user-get")?.addEventListener("click", () => load().catch((e) => toast(e.message, "error")));
   document.getElementById("user-search").addEventListener("keydown", (e) => {
     if (e.key === "Enter") load().catch((err) => toast(err.message, "error"));
   });

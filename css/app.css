@@ -441,6 +441,7 @@ tr:hover td { background: var(--mds-color-theme-background-primary-hover, #fffff
 }
 
 .pager { display: flex; gap: 8px; align-items: center; margin-top: 12px; color: var(--muted); font-size: 12px; }
+.pager .btn { min-height: 32px; padding: 6px 14px; }
 .detail-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
 .detail-tabs button[aria-selected="true"] {
   background: var(--btn-primary-bg);
