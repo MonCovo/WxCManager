@@ -125,7 +125,7 @@ export function createClient(getToken) {
     listLicenses: (orgId) => get("/licenses", { orgId }),
     listLocations: (orgId) => get("/locations", { orgId, max: 500 }),
     getLocation: (id) => get(`/locations/${id}`),
-    createLocation: (body) => post("/locations", body),
+    createLocation: (body, orgId) => post("/locations", body, { orgId }),
     updateLocation: (id, body) => put(`/locations/${id}`, body),
     deleteLocation: (id) => del(`/locations/${id}`),
 
@@ -168,6 +168,7 @@ export function createClient(getToken) {
     workspaceNumbers: (workspaceId) => get(`/workspaces/${workspaceId}/features/numbers`),
     updateWorkspaceNumbers: (workspaceId, body) => put(`/workspaces/${workspaceId}/features/numbers`, body),
 
-    listOrgs: () => get("/organizations"),
+    listOrgs: (query) => get("/organizations", query),
+    getOrg: (id) => get(`/organizations/${id}`),
   };
 }

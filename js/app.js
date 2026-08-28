@@ -16,17 +16,27 @@ import {
 
 const TOKEN_KEY = "wxc.token";
 const CONNECTED_KEY = "wxc.connectedAt";
+const ORG_ID_KEY = "wxc.orgId";
+const ORG_NAME_KEY = "wxc.orgName";
 const TOKEN_TTL_MS = 12 * 60 * 60 * 1000;
 
 const state = {
   token: sessionStorage.getItem(TOKEN_KEY) || "",
   connectedAt: Number(sessionStorage.getItem(CONNECTED_KEY) || 0),
   me: null,
-  orgId: "",
-  orgName: "",
+  orgId: sessionStorage.getItem(ORG_ID_KEY) || "",
+  orgName: sessionStorage.getItem(ORG_NAME_KEY) || "",
+  orgs: [],
+  selectedOrgId: "",
   locations: [],
   licenses: [],
   supportedDevices: [],
+  fetched: {
+    locations: false,
+    licenses: false,
+    supportedDevices: false,
+  },
+  snapshot: {},
   cache: {},
 };
 
@@ -58,12 +68,35 @@ function setSession(token) {
   sessionStorage.setItem(CONNECTED_KEY, String(state.connectedAt));
 }
 
+function clearOrgData() {
+  state.locations = [];
+  state.licenses = [];
+  state.supportedDevices = [];
+  state.fetched = { locations: false, licenses: false, supportedDevices: false };
+  state.snapshot = {};
+}
+
+function setOrg(orgId, orgName) {
+  state.orgId = orgId;
+  state.orgName = orgName || orgId;
+  sessionStorage.setItem(ORG_ID_KEY, orgId);
+  sessionStorage.setItem(ORG_NAME_KEY, state.orgName);
+  clearOrgData();
+}
+
 function clearSession() {
   state.token = "";
   state.connectedAt = 0;
   state.me = null;
+  state.orgId = "";
+  state.orgName = "";
+  state.orgs = [];
+  state.selectedOrgId = "";
+  clearOrgData();
   sessionStorage.removeItem(TOKEN_KEY);
   sessionStorage.removeItem(CONNECTED_KEY);
+  sessionStorage.removeItem(ORG_ID_KEY);
+  sessionStorage.removeItem(ORG_NAME_KEY);
 }
 
 function hashParts() {
@@ -76,16 +109,51 @@ function go(hash) {
   location.hash = hash;
 }
 
-async function loadLookups() {
-  const orgId = state.orgId;
-  const [locs, lics, devices] = await Promise.all([
-    api.listLocations(orgId),
-    api.listLicenses(orgId),
-    api.supportedDevices(orgId).catch(() => ({ data: { devices: [] } })),
-  ]);
+async function fetchLocations() {
+  const locs = await api.listLocations(state.orgId);
   state.locations = locs.data.items || locs.data.locations || [];
+  state.fetched.locations = true;
+  setSnapshot("locations", state.locations.length);
+  return state.locations;
+}
+
+async function fetchLicenses() {
+  const lics = await api.listLicenses(state.orgId);
   state.licenses = lics.data.items || [];
+  state.fetched.licenses = true;
+  setSnapshot("licenses", state.licenses.length);
+  return state.licenses;
+}
+
+async function fetchSupportedDevices() {
+  const devices = await api.supportedDevices(state.orgId).catch(() => ({ data: { devices: [] } }));
   state.supportedDevices = devices.data.devices || devices.data.items || [];
+  state.fetched.supportedDevices = true;
+  return state.supportedDevices;
+}
+
+function setSnapshot(key, count, error) {
+  state.snapshot[key] = { count, error, at: Date.now() };
+}
+
+async function ensureLocations() {
+  if (!state.fetched.locations) await fetchLocations();
+}
+
+async function ensureLicenses() {
+  if (!state.fetched.licenses) await fetchLicenses();
+}
+
+async function ensureSupportedDevices() {
+  if (!state.fetched.supportedDevices) await fetchSupportedDevices();
+}
+
+function snapshotLabel(key) {
+  const snap = state.snapshot[key];
+  if (!snap) return "Not loaded";
+  if (snap.error) return snap.error;
+  const when = new Date(snap.at).toLocaleTimeString();
+  return `${snap.count} loaded · ${when}`;
 }
 
 function phoneModels() {
@@ -145,10 +213,15 @@ function numberOwner(n) {
     : owner.displayName || owner.type || "Assigned";
 }
 
+function showScreen(name) {
+  document.getElementById("login-screen").hidden = name !== "login";
+  document.getElementById("wizard-screen").hidden = name !== "wizard";
+  document.getElementById("app").hidden = name !== "app";
+}
+
 function renderShell() {
-  document.getElementById("app").hidden = false;
-  document.getElementById("login-screen").hidden = true;
-  document.getElementById("org-label").textContent = state.orgName || state.me?.emails?.[0] || "Connected";
+  showScreen("app");
+  document.getElementById("org-label").textContent = state.orgName || "Organization selected";
   document.getElementById("session-meta").innerHTML = `
     ${escapeHtml(state.me?.displayName || "")}<br />
     ${escapeHtml(state.me?.emails?.[0] || "")}<br />
@@ -157,8 +230,7 @@ function renderShell() {
 }
 
 function renderLogin(error) {
-  document.getElementById("app").hidden = true;
-  document.getElementById("login-screen").hidden = false;
+  showScreen("login");
   const err = document.getElementById("login-error");
   if (error) {
     err.hidden = false;
@@ -168,24 +240,93 @@ function renderLogin(error) {
   }
 }
 
-async function connect(token) {
+function renderOrgList(filter = "") {
+  const q = filter.trim().toLowerCase();
+  const items = state.orgs.filter((o) => {
+    const name = `${o.displayName || ""} ${o.id || ""}`.toLowerCase();
+    return !q || name.includes(q);
+  });
+  const root = document.getElementById("org-list");
+  if (!items.length) {
+    root.innerHTML = `<p class="empty">No organizations match. Paste an org ID below.</p>`;
+    return;
+  }
+  root.innerHTML = items.map((o) => `
+    <button type="button" class="org-item ${o.id === state.selectedOrgId ? "selected" : ""}" data-id="${escapeHtml(o.id)}" data-name="${escapeHtml(o.displayName || o.id)}" role="option" aria-selected="${o.id === state.selectedOrgId}">
+      <strong>${escapeHtml(o.displayName || "Unnamed organization")}${o.id === state.me?.orgId ? " · home" : ""}</strong>
+      <span>${escapeHtml(o.id)}</span>
+    </button>
+  `).join("");
+  root.querySelectorAll(".org-item").forEach((btn) => {
+    btn.onclick = () => {
+      state.selectedOrgId = btn.dataset.id;
+      document.getElementById("org-id-input").value = btn.dataset.id;
+      renderOrgList(document.getElementById("org-search").value);
+    };
+  });
+}
+
+async function showWizard() {
+  showScreen("wizard");
+  document.getElementById("wizard-who").textContent = `Signed in as ${state.me?.emails?.[0] || state.me?.displayName || "admin"}. Choose the org to manage.`;
+  document.getElementById("wizard-error").hidden = true;
+  document.getElementById("org-list").innerHTML = spinner("Loading organizations…");
+  try {
+    const { data } = await api.listOrgs();
+    const items = [...(data.items || [])];
+    if (state.me?.orgId && !items.some((o) => o.id === state.me.orgId)) {
+      items.unshift({ id: state.me.orgId, displayName: state.me.orgId, home: true });
+    }
+    state.orgs = items;
+    state.selectedOrgId = state.orgId || state.me?.orgId || items[0]?.id || "";
+    document.getElementById("org-id-input").value = state.selectedOrgId;
+    renderOrgList();
+  } catch (err) {
+    state.orgs = state.me?.orgId ? [{ id: state.me.orgId, displayName: "Home organization" }] : [];
+    state.selectedOrgId = state.me?.orgId || "";
+    document.getElementById("org-id-input").value = state.selectedOrgId;
+    renderOrgList();
+    const box = document.getElementById("wizard-error");
+    box.hidden = false;
+    box.textContent = `Could not list organizations (${err.message}). Use your home org or paste an ID.`;
+  }
+}
+
+async function confirmOrg() {
+  const pasted = document.getElementById("org-id-input").value.trim();
+  const orgId = pasted || state.selectedOrgId;
+  if (!orgId) throw new Error("Select an organization or paste an org ID.");
+  let name = state.orgs.find((o) => o.id === orgId)?.displayName;
+  if (!name) {
+    try {
+      const { data } = await api.getOrg(orgId);
+      name = data.displayName || orgId;
+    } catch {
+      name = orgId;
+    }
+  }
+  setOrg(orgId, name);
+  go("#/dashboard");
+  renderShell();
+  route();
+}
+
+async function authenticate(token) {
   const cleaned = token.replace(/^Bearer\s+/i, "").trim();
   if (!cleaned) throw new Error("Paste a personal access token.");
   state.token = cleaned;
   const { data: me } = await api.me();
   setSession(cleaned);
   state.me = me;
-  state.orgId = me.orgId;
-  try {
-    const orgs = await api.listOrgs();
-    const mine = (orgs.data.items || []).find((o) => o.id === me.orgId);
-    state.orgName = mine?.displayName || me.orgId;
-  } catch {
-    state.orgName = me.orgId;
-  }
-  await loadLookups();
-  renderShell();
-  route();
+}
+
+async function connect(token) {
+  await authenticate(token);
+  state.orgId = "";
+  state.orgName = "";
+  sessionStorage.removeItem(ORG_ID_KEY);
+  sessionStorage.removeItem(ORG_NAME_KEY);
+  await showWizard();
 }
 
 async function route() {
@@ -195,13 +336,16 @@ async function route() {
   }
   if (!state.me) {
     try {
-      await connect(state.token);
-      return;
+      await authenticate(state.token);
     } catch (err) {
       clearSession();
       renderLogin(err.message);
       return;
     }
+  }
+  if (!state.orgId) {
+    await showWizard();
+    return;
   }
 
   renderShell();
@@ -232,46 +376,73 @@ async function route() {
   }
 }
 
-async function renderDashboard(content, actions) {
-  actions.innerHTML = `<a class="btn btn-primary" href="#/users">Provision user</a>`;
-  const [people, devices, numbers] = await Promise.all([
-    api.listPeople({ orgId: state.orgId, max: 1 }).catch(() => ({ data: { items: [] } })),
-    api.listDevices({ orgId: state.orgId, max: 100 }).catch(() => ({ data: { items: [] } })),
-    api.listNumbers({ orgId: state.orgId, max: 100 }).catch(() => ({ data: { phoneNumbers: [] } })),
-  ]);
-  const deviceItems = devices.data.items || [];
-  const nums = numbers.data.phoneNumbers || numbers.data.items || [];
-  const unassigned = nums.filter((n) => !n.owner).length;
-  const callingLicenses = state.licenses.filter(isCallingLicense);
-  const callingConsumed = callingLicenses.reduce((sum, l) => sum + (l.consumedUnits || 0), 0);
+function idleGet(title, hint, btnId = "resource-get") {
+  return `
+    <div class="empty">
+      <strong>${escapeHtml(title)}</strong>
+      <p>${escapeHtml(hint)}</p>
+      <button type="button" class="btn btn-primary" id="${btnId}">Get</button>
+    </div>`;
+}
 
+async function renderDashboard(content, actions) {
+  actions.innerHTML = `<button class="btn" id="change-org-top">Change organization</button>`;
+  const cards = [
+    { key: "users", label: "Users", href: "#/users" },
+    { key: "devices", label: "Devices", href: "#/devices" },
+    { key: "locations", label: "Locations", href: "#/locations" },
+    { key: "numbers", label: "Numbers", href: "#/numbers" },
+    { key: "workspaces", label: "Workspaces", href: "#/workspaces" },
+    { key: "licenses", label: "Licenses", href: "#/dashboard" },
+  ];
   content.innerHTML = `
-    <div class="grid-stats">
-      <article class="stat-card"><div class="label">Calling licenses in use</div><div class="value">${callingConsumed}</div></article>
-      <article class="stat-card"><div class="label">Locations</div><div class="value">${state.locations.length}</div></article>
-      <article class="stat-card"><div class="label">Devices (first 100)</div><div class="value">${deviceItems.length}</div></article>
-      <article class="stat-card"><div class="label">Unassigned numbers</div><div class="value">${unassigned}</div></article>
-    </div>
-    <div class="split">
-      <section class="panel">
-        <h3>Calling licenses</h3>
-        ${callingLicenses.length ? `
-          <div class="table-wrap"><table>
-            <thead><tr><th>License</th><th>Used</th><th>Total</th></tr></thead>
-            <tbody>${callingLicenses.map((l) => `<tr><td>${escapeHtml(l.name)}</td><td>${l.consumedUnits ?? 0}</td><td>${l.totalUnits ?? "—"}</td></tr>`).join("")}</tbody>
-          </table></div>` : `<p class="muted">No calling licenses visible with this token. Confirm the account is a full or calling admin.</p>`}
-      </section>
-      <section class="panel">
-        <h3>Quick start</h3>
-        <ol class="muted">
-          <li>Provision a user with a Webex Calling license and location.</li>
-          <li>Assign a DID or extension from Numbers.</li>
-          <li>Add a phone by MAC address or generate an activation code.</li>
-        </ol>
-        <p class="muted">People list probe returned ${people.data.items?.length ?? 0} row(s). Use Users to search and manage the directory.</p>
-      </section>
+    <p class="muted">Organization <strong>${escapeHtml(state.orgName)}</strong> is selected. Data is not requested until you click Get.</p>
+    <div class="inventory">
+      ${cards.map((c) => `
+        <article class="panel inventory-card">
+          <h3>${escapeHtml(c.label)}</h3>
+          <p class="muted status" data-status="${c.key}">${escapeHtml(snapshotLabel(c.key))}</p>
+          <div class="toolbar">
+            <button type="button" class="btn btn-primary" data-get="${c.key}">Get</button>
+            <a class="btn btn-ghost" href="${c.href}">Open</a>
+          </div>
+        </article>`).join("")}
     </div>
   `;
+  document.getElementById("change-org-top").onclick = () => showWizard();
+  content.querySelectorAll("[data-get]").forEach((btn) => {
+    btn.onclick = () => getDataset(btn.dataset.get, content).catch((err) => toast(err.message, "error"));
+  });
+}
+
+async function getDataset(key, content) {
+  const status = content?.querySelector(`[data-status="${key}"]`);
+  if (status) status.textContent = "Requesting…";
+  try {
+    if (key === "users") {
+      const { data } = await api.listPeople({ orgId: state.orgId, max: 100, callingData: true });
+      setSnapshot("users", (data.items || []).length);
+    } else if (key === "devices") {
+      const { data } = await api.listDevices({ orgId: state.orgId, max: 100 });
+      setSnapshot("devices", (data.items || []).length);
+    } else if (key === "locations") {
+      await fetchLocations();
+    } else if (key === "numbers") {
+      const { data } = await api.listNumbers({ orgId: state.orgId, max: 100 });
+      setSnapshot("numbers", (data.phoneNumbers || data.items || []).length);
+    } else if (key === "workspaces") {
+      const { data } = await api.listWorkspaces({ orgId: state.orgId, max: 100 });
+      setSnapshot("workspaces", (data.items || []).length);
+    } else if (key === "licenses") {
+      await fetchLicenses();
+    }
+    if (status) status.textContent = snapshotLabel(key);
+    toast(`Loaded ${key}`);
+  } catch (err) {
+    setSnapshot(key, 0, err.message);
+    if (status) status.textContent = err.message;
+    throw err;
+  }
 }
 
 async function renderUsers(content, actions) {
@@ -283,11 +454,11 @@ async function renderUsers(content, actions) {
     <div class="toolbar">
       <input id="user-search" placeholder="Search email or name" />
       <select id="user-location"><option value="">All locations</option>${locationOptions()}</select>
-      <button class="btn" id="user-go">Search</button>
+      <button class="btn" id="user-go">Get</button>
       <span class="spacer"></span>
       <span class="muted" id="user-count"></span>
     </div>
-    <div id="user-table">${spinner("Search or load users…")}</div>
+    <div id="user-table">${idleGet("Users not loaded", "Nothing is requested until you click Get. Optional search filters apply to that request.", "user-get")}</div>
   `;
 
   const load = async () => {
@@ -300,6 +471,7 @@ async function renderUsers(content, actions) {
     document.getElementById("user-table").innerHTML = spinner();
     const { data } = await api.listPeople(query);
     const items = data.items || [];
+    setSnapshot("users", items.length);
     document.getElementById("user-count").textContent = `${items.length} shown`;
     if (!items.length) {
       document.getElementById("user-table").innerHTML = emptyState("No users", "Try a different search, or provision a new calling user.");
@@ -325,12 +497,28 @@ async function renderUsers(content, actions) {
   };
 
   document.getElementById("user-go").onclick = () => load().catch((e) => toast(e.message, "error"));
+  document.getElementById("user-get")?.addEventListener("click", () => load().catch((e) => toast(e.message, "error")));
   document.getElementById("user-search").addEventListener("keydown", (e) => {
     if (e.key === "Enter") load().catch((err) => toast(err.message, "error"));
   });
-  document.getElementById("create-user").onclick = () => showCreateUser();
-  document.getElementById("import-users").onclick = () => showImportUsers();
-  await load();
+  document.getElementById("create-user").onclick = async () => {
+    try {
+      await ensureLocations();
+      await ensureLicenses();
+      showCreateUser();
+    } catch (err) {
+      toast(err.message, "error");
+    }
+  };
+  document.getElementById("import-users").onclick = async () => {
+    try {
+      await ensureLocations();
+      await ensureLicenses();
+      showImportUsers();
+    } catch (err) {
+      toast(err.message, "error");
+    }
+  };
 }
 
 function showCreateUser() {
@@ -582,7 +770,14 @@ async function renderUser(content, actions, id) {
     }
   };
 
-  document.getElementById("add-user-device").onclick = () => showAddDevice({ personId: id, personName: person.displayName });
+  document.getElementById("add-user-device").onclick = async () => {
+    try {
+      await ensureSupportedDevices();
+      showAddDevice({ personId: id, personName: person.displayName });
+    } catch (err) {
+      toast(err.message, "error");
+    }
+  };
   bindDeviceRows();
 }
 
@@ -716,9 +911,9 @@ async function renderDevices(content, actions) {
         <option value="connected">Connected</option>
         <option value="disconnected">Disconnected</option>
       </select>
-      <button class="btn" id="dev-go">Filter</button>
+      <button class="btn" id="dev-go">Get</button>
     </div>
-    <div id="dev-table"></div>
+    <div id="dev-table">${idleGet("Devices not loaded", "Click Get to request devices for this organization.", "dev-get")}</div>
   `;
   const load = async () => {
     const search = document.getElementById("dev-search").value.trim();
@@ -729,34 +924,82 @@ async function renderDevices(content, actions) {
     else if (search) query.displayName = search;
     document.getElementById("dev-table").innerHTML = spinner();
     const { data } = await api.listDevices(query);
+    setSnapshot("devices", (data.items || []).length);
     document.getElementById("dev-table").innerHTML = deviceTable(data.items || []);
     bindDeviceRows();
   };
   document.getElementById("dev-go").onclick = () => load().catch((e) => toast(e.message, "error"));
-  document.getElementById("add-device").onclick = () => showAddDevice({});
-  await load();
+  document.getElementById("dev-get")?.addEventListener("click", () => load().catch((e) => toast(e.message, "error")));
+  document.getElementById("add-device").onclick = async () => {
+    try {
+      await ensureSupportedDevices();
+      showAddDevice({});
+    } catch (err) {
+      toast(err.message, "error");
+    }
+  };
 }
 
 async function renderLocations(content, actions) {
   actions.innerHTML = `<button class="btn btn-primary" id="create-location">Create location</button>`;
-  if (!state.locations.length) await loadLookups();
+
+  const paint = () => {
+    if (!state.fetched.locations) {
+      content.querySelector("#loc-table").innerHTML = idleGet("Locations not loaded", "Click Get to request calling locations for this organization.", "loc-get");
+      document.getElementById("loc-get")?.addEventListener("click", () => load().catch((e) => toast(e.message, "error")));
+      return;
+    }
+    if (!state.locations.length) {
+      content.querySelector("#loc-table").innerHTML = emptyState("No locations", "Create a location, then assign users and numbers to it.");
+      return;
+    }
+    content.querySelector("#loc-table").innerHTML = `
+      <div class="table-wrap"><table>
+        <thead><tr><th>Name</th><th>Address</th><th>Time zone</th><th></th></tr></thead>
+        <tbody>
+          ${state.locations.map((l) => {
+            const addr = l.address || {};
+            const line = [addr.address1, addr.city, addr.postalCode, addr.country].filter(Boolean).join(", ");
+            return `<tr>
+              <td>${escapeHtml(l.name)}</td>
+              <td>${escapeHtml(line || "—")}</td>
+              <td>${escapeHtml(l.timeZone || "")}</td>
+              <td><button class="btn btn-ghost" data-del-loc="${escapeHtml(l.id)}" data-name="${escapeHtml(l.name)}">Delete</button></td>
+            </tr>`;
+          }).join("")}
+        </tbody>
+      </table></div>`;
+    content.querySelectorAll("[data-del-loc]").forEach((btn) => {
+      btn.onclick = async () => {
+        if (!(await confirmAction("Delete location", `Delete ${btn.dataset.name}? The location must be empty.`))) return;
+        try {
+          await api.deleteLocation(btn.dataset.delLoc);
+          toast("Location deleted");
+          await fetchLocations();
+          paint();
+        } catch (err) {
+          toast(err.message, "error");
+        }
+      };
+    });
+  };
+
+  const load = async () => {
+    content.querySelector("#loc-table").innerHTML = spinner();
+    await fetchLocations();
+    paint();
+  };
+
   content.innerHTML = `
-    <div class="table-wrap"><table>
-      <thead><tr><th>Name</th><th>Address</th><th>Time zone</th><th></th></tr></thead>
-      <tbody>
-        ${state.locations.map((l) => {
-          const addr = l.address || {};
-          const line = [addr.address1, addr.city, addr.postalCode, addr.country].filter(Boolean).join(", ");
-          return `<tr>
-            <td>${escapeHtml(l.name)}</td>
-            <td>${escapeHtml(line || "—")}</td>
-            <td>${escapeHtml(l.timeZone || "")}</td>
-            <td><button class="btn btn-ghost" data-del-loc="${escapeHtml(l.id)}" data-name="${escapeHtml(l.name)}">Delete</button></td>
-          </tr>`;
-        }).join("")}
-      </tbody>
-    </table></div>
+    <div class="toolbar">
+      <span class="muted">${escapeHtml(snapshotLabel("locations"))}</span>
+      <span class="spacer"></span>
+      <button class="btn" id="loc-go">Get</button>
+    </div>
+    <div id="loc-table"></div>
   `;
+  paint();
+  document.getElementById("loc-go").onclick = () => load().catch((e) => toast(e.message, "error"));
   document.getElementById("create-location").onclick = () => {
     openModal({
       title: "Create location",
@@ -783,26 +1026,13 @@ async function renderLocations(content, actions) {
             postalCode: formValue(modal, "postalCode"),
             country: formValue(modal, "country"),
           },
-        });
+        }, state.orgId);
         toast("Location created");
-        await loadLookups();
+        await fetchLocations();
         route();
       },
     });
   };
-  document.querySelectorAll("[data-del-loc]").forEach((btn) => {
-    btn.onclick = async () => {
-      if (!(await confirmAction("Delete location", `Delete ${btn.dataset.name}? The location must be empty.`))) return;
-      try {
-        await api.deleteLocation(btn.dataset.delLoc);
-        toast("Location deleted");
-        await loadLookups();
-        route();
-      } catch (err) {
-        toast(err.message, "error");
-      }
-    };
-  });
 }
 
 async function renderNumbers(content, actions) {
@@ -816,9 +1046,9 @@ async function renderNumbers(content, actions) {
         <option value="assigned">Assigned</option>
       </select>
       <input id="num-search" placeholder="Number or extension" />
-      <button class="btn" id="num-go">Filter</button>
+      <button class="btn" id="num-go">Get</button>
     </div>
-    <div id="num-table"></div>
+    <div id="num-table">${idleGet("Numbers not loaded", "Click Get to request phone numbers for this organization.", "num-get")}</div>
   `;
   const load = async () => {
     const query = { orgId: state.orgId, max: 100 };
@@ -830,6 +1060,7 @@ async function renderNumbers(content, actions) {
     document.getElementById("num-table").innerHTML = spinner();
     const { data } = await api.listNumbers(query);
     let items = data.phoneNumbers || data.items || [];
+    setSnapshot("numbers", items.length);
     const ownerFilter = document.getElementById("num-owner").value;
     if (ownerFilter === "unassigned") items = items.filter((n) => !n.owner);
     if (ownerFilter === "assigned") items = items.filter((n) => n.owner);
@@ -883,7 +1114,14 @@ async function renderNumbers(content, actions) {
     });
   };
   document.getElementById("num-go").onclick = () => load().catch((e) => toast(e.message, "error"));
-  document.getElementById("add-numbers").onclick = () => {
+  document.getElementById("num-get")?.addEventListener("click", () => load().catch((e) => toast(e.message, "error")));
+  document.getElementById("add-numbers").onclick = async () => {
+    try {
+      await ensureLocations();
+    } catch (err) {
+      toast(err.message, "error");
+      return;
+    }
     openModal({
       title: "Add numbers to a location",
       confirmLabel: "Add",
@@ -907,17 +1145,14 @@ async function renderNumbers(content, actions) {
       },
     });
   };
-  await load();
 }
-
-async function renderWorkspaces(content, actions) {
   actions.innerHTML = `<button class="btn btn-primary" id="create-ws">Create workspace</button>`;
   content.innerHTML = `
     <div class="toolbar">
       <input id="ws-search" placeholder="Workspace name" />
-      <button class="btn" id="ws-go">Search</button>
+      <button class="btn" id="ws-go">Get</button>
     </div>
-    <div id="ws-table"></div>
+    <div id="ws-table">${idleGet("Workspaces not loaded", "Click Get to request workspaces for this organization.", "ws-get")}</div>
   `;
   const load = async () => {
     const query = { orgId: state.orgId, max: 100 };
@@ -926,6 +1161,7 @@ async function renderWorkspaces(content, actions) {
     document.getElementById("ws-table").innerHTML = spinner();
     const { data } = await api.listWorkspaces(query);
     const items = data.items || [];
+    setSnapshot("workspaces", items.length);
     if (!items.length) {
       document.getElementById("ws-table").innerHTML = emptyState("No workspaces", "Create a calling workspace for a shared area phone.");
       return;
@@ -946,7 +1182,14 @@ async function renderWorkspaces(content, actions) {
           </tr>`).join("")}</tbody>
       </table></div>`;
     document.querySelectorAll("[data-ws-dev]").forEach((btn) => {
-      btn.onclick = () => showAddDevice({ workspaceId: btn.dataset.wsDev, workspaceName: btn.dataset.name });
+      btn.onclick = async () => {
+        try {
+          await ensureSupportedDevices();
+          showAddDevice({ workspaceId: btn.dataset.wsDev, workspaceName: btn.dataset.name });
+        } catch (err) {
+          toast(err.message, "error");
+        }
+      };
     });
     document.querySelectorAll("[data-ws-del]").forEach((btn) => {
       btn.onclick = async () => {
@@ -962,7 +1205,14 @@ async function renderWorkspaces(content, actions) {
     });
   };
   document.getElementById("ws-go").onclick = () => load().catch((e) => toast(e.message, "error"));
-  document.getElementById("create-ws").onclick = () => {
+  document.getElementById("ws-get")?.addEventListener("click", () => load().catch((e) => toast(e.message, "error")));
+  document.getElementById("create-ws").onclick = async () => {
+    try {
+      await ensureLocations();
+    } catch (err) {
+      toast(err.message, "error");
+      return;
+    }
     openModal({
       title: "Create workspace",
       confirmLabel: "Create",
@@ -999,7 +1249,6 @@ async function renderWorkspaces(content, actions) {
       },
     });
   };
-  await load();
 }
 
 function bindChrome() {
@@ -1018,6 +1267,30 @@ function bindChrome() {
   document.getElementById("disconnect").onclick = () => {
     clearSession();
     renderLogin();
+  };
+  document.getElementById("wizard-back").onclick = () => {
+    clearSession();
+    renderLogin();
+  };
+  document.getElementById("wizard-continue").onclick = async () => {
+    const btn = document.getElementById("wizard-continue");
+    btn.disabled = true;
+    try {
+      await confirmOrg();
+    } catch (err) {
+      const box = document.getElementById("wizard-error");
+      box.hidden = false;
+      box.textContent = err.message;
+    } finally {
+      btn.disabled = false;
+    }
+  };
+  document.getElementById("org-search").addEventListener("input", (e) => renderOrgList(e.target.value));
+  document.getElementById("change-org").onclick = () => {
+    state.orgId = "";
+    sessionStorage.removeItem(ORG_ID_KEY);
+    sessionStorage.removeItem(ORG_NAME_KEY);
+    showWizard();
   };
   document.getElementById("open-log").onclick = () => {
     document.getElementById("log-drawer").hidden = false;

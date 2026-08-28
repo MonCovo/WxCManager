@@ -17,6 +17,11 @@
 <body>
   <div id="login-screen" class="login-screen" hidden>
     <div class="login-panel">
+      <ol class="wizard-steps" aria-label="Setup steps">
+        <li class="current">Token</li>
+        <li>Organization</li>
+        <li>Get data</li>
+      </ol>
       <div class="login-brand">
         <div class="logo-mark" aria-hidden="true"></div>
         <div>
@@ -44,6 +49,37 @@
     </div>
   </div>
 
+  <div id="wizard-screen" class="login-screen" hidden>
+    <div class="login-panel">
+      <ol class="wizard-steps" aria-label="Setup steps">
+        <li class="done">Token</li>
+        <li class="current">Organization</li>
+        <li>Get data</li>
+      </ol>
+      <div class="login-brand">
+        <div class="logo-mark" aria-hidden="true"></div>
+        <div>
+          <h1>Select organization</h1>
+          <p id="wizard-who">Choose the org this token should manage.</p>
+        </div>
+      </div>
+      <div class="field">
+        <label for="org-search">Filter</label>
+        <input id="org-search" placeholder="Search by name" />
+      </div>
+      <div id="org-list" class="org-list" role="listbox" aria-label="Organizations"></div>
+      <div class="field">
+        <label for="org-id-input">Or paste an organization ID</label>
+        <input id="org-id-input" class="mono" placeholder="Y2lzY29zcGFyazovL3VzL09SR0FOSVpBVElPTi8..." />
+      </div>
+      <p id="wizard-error" class="form-error" hidden></p>
+      <div class="login-actions">
+        <button type="button" class="btn btn-ghost" id="wizard-back">Disconnect</button>
+        <button type="button" class="btn btn-primary" id="wizard-continue">Continue</button>
+      </div>
+    </div>
+  </div>
+
   <div id="app" class="app" hidden>
     <aside class="sidebar">
       <div class="sidebar-brand">
@@ -62,6 +98,7 @@
         <a href="#/numbers" data-route="numbers">Numbers</a>
         <a href="#/workspaces" data-route="workspaces">Workspaces</a>
       </nav>
+      <button type="button" class="btn btn-ghost btn-block" id="change-org">Change organization</button>
 
       <div class="sidebar-footer">
         <div id="session-meta" class="session-meta"></div>

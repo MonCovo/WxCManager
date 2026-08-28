@@ -180,6 +180,7 @@ code { font-family: var(--mono); font-size: 0.9em; }
   font-size: 14px;
 }
 .login-form { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.login-panel .field { margin-top: 12px; }
 .login-form label { font-weight: 600; font-size: 12px; }
 .login-form textarea {
   width: 100%;
@@ -456,6 +457,66 @@ tr:hover td { background: var(--mds-color-theme-background-primary-hover, #fffff
   background: var(--surface);
   border-radius: var(--radius);
 }
+
+.wizard-steps {
+  list-style: none;
+  display: flex;
+  gap: 8px;
+  padding: 0;
+  margin: 0 0 20px;
+}
+.wizard-steps li {
+  flex: 1;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  padding: 8px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+}
+.wizard-steps li.current {
+  background: var(--mds-color-theme-background-alert-theme-normal, #0a274a);
+  color: var(--accent-text);
+}
+.wizard-steps li.done { color: var(--ok); }
+
+.org-list {
+  max-height: 240px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  margin: 12px 0;
+  background: var(--surface);
+}
+.org-item {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+  padding: 12px 14px;
+  cursor: pointer;
+  font: inherit;
+}
+.org-item:last-child { border-bottom: 0; }
+.org-item:hover { background: var(--mds-color-theme-background-primary-hover, #ffffff12); }
+.org-item.selected {
+  background: var(--mds-color-theme-background-alert-theme-normal, #0a274a);
+}
+.org-item strong { display: block; }
+.org-item span { display: block; font-size: 12px; color: var(--muted); font-family: var(--mono); word-break: break-all; }
+
+.inventory {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+.inventory-card h3 { margin: 0 0 6px; font-size: 16px; }
+.inventory-card .status { min-height: 2.4em; margin: 0 0 12px; }
+.inventory-card .toolbar { margin: 0; }
 
 @media (max-width: 900px) {
   .app { grid-template-columns: 1fr; }
