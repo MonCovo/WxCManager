@@ -29,7 +29,7 @@ You need a **full administrator** or **calling administrator** role. The token i
 1. Push this repository to GitHub.
 2. In the repo: **Settings → Pages**.
 3. Source: **Deploy from a branch**, branch **main**, folder **/ (root)**.
-4. Open `https://<user>.github.io/<repo>/`.
+4. Staging site: [https://moncovo.github.io/WxCManager/](https://moncovo.github.io/WxCManager/).
 
 Because this is a static site, all API calls are made from the browser. Serve it over HTTPS (Pages) or `http://localhost` — opening `index.html` as `file://` will fail CORS.
 

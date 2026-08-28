@@ -20,6 +20,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { margin: 0; min-height: 100%; }
 body {
   font-family: var(--font);
@@ -117,6 +118,9 @@ code { font-family: var(--mono); font-size: 0.9em; }
 .content { padding: 24px; }
 
 .login-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 15;
   min-height: 100vh;
   display: grid;
   place-items: center;
