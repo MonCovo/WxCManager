@@ -123,7 +123,7 @@ export function createClient(getToken) {
     deletePerson: (id) => del(`/people/${id}`),
 
     listLicenses: (orgId) => get("/licenses", { orgId }),
-    listLocations: (orgId) => get("/locations", { orgId, max: 1000 }),
+    listLocations: (orgId) => get("/locations", { orgId, max: 500 }),
     getLocation: (id) => get(`/locations/${id}`),
     createLocation: (body) => post("/locations", body),
     updateLocation: (id, body) => put(`/locations/${id}`, body),

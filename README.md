@@ -2,6 +2,8 @@
 
 Static HTML tool for managing and provisioning **Webex Calling** users and devices. Designed to run on **GitHub Pages** during development. It calls the Webex REST APIs in the browser using a **personal access token**.
 
+The UI uses the [Momentum Design](https://momentum.design/en/) Webex dark-stable tokens (`@momentum-design/tokens`) so it follows the same language as Webex Control Hub.
+
 Personal tokens are for testing only. They expire **12 hours** after you sign in to the Developer Portal. Production apps should use a [Webex Integration and OAuth](https://developer.webex.com/docs/integrations).
 
 ## What it can do
