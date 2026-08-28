@@ -33,10 +33,10 @@ function parseLink(header) {
 function errorMessage(payload, status, statusText) {
   if (!payload) return `${status} ${statusText}`.trim();
   if (typeof payload === "string") return payload;
-  const nested = payload.errors?.map((e) => e.description || e.message).filter(Boolean);
-  return [payload.message, nested?.join("; "), payload.trackingId && `trackingId ${payload.trackingId}`]
-    .filter(Boolean)
-    .join(" — ");
+  const nested = payload.errors?.map((e) => e.description || e.message).filter(Boolean) || [];
+  const parts = [...new Set([payload.message, ...nested].filter(Boolean))];
+  if (payload.trackingId) parts.push(`trackingId ${payload.trackingId}`);
+  return parts.join(" — ") || `${status} ${statusText}`.trim();
 }
 
 export function createClient(getToken) {
