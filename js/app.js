@@ -474,17 +474,12 @@ async function renderUsers(content, actions) {
       <input id="user-search" placeholder="Search email or name" />
       <select id="user-location"><option value="">All locations</option>${locationOptions()}</select>
       <button class="btn" id="user-go">Get</button>
+      <button class="btn" id="user-more" hidden>Load next 100</button>
       <span class="spacer"></span>
       <span class="muted" id="user-count"></span>
     </div>
     <div id="user-table"></div>
   `;
-
-  let observer = null;
-  const disconnect = () => {
-    observer?.disconnect();
-    observer = null;
-  };
 
   const userRow = (p) => `
     <tr class="row-link" data-id="${escapeHtml(p.id)}">
@@ -501,54 +496,41 @@ async function renderUsers(content, actions) {
     });
   };
 
-  const updateCount = () => {
-    const el = document.getElementById("user-count");
-    if (!el) return;
-    if (!state.usersList.length) {
-      el.textContent = "";
-      return;
-    }
-    el.textContent = state.usersHasMore
-      ? `${state.usersList.length} loaded · scroll for more`
-      : `${state.usersList.length} loaded`;
-  };
+  const moreBtn = () => document.getElementById("user-more");
 
-  const bindSentinel = () => {
-    disconnect();
-    const sentinel = document.getElementById("user-sentinel");
-    const scroller = document.getElementById("user-scroll");
-    if (!sentinel || !scroller || !state.usersHasMore) return;
-    observer = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) {
-        loadMore().catch((err) => toast(err.message, "error"));
-      }
-    }, { root: scroller, rootMargin: "160px" });
-    observer.observe(sentinel);
+  const updatePager = () => {
+    const el = document.getElementById("user-count");
+    const btn = moreBtn();
+    if (el) {
+      el.textContent = state.usersList.length
+        ? `${state.usersList.length} loaded`
+        : "";
+    }
+    if (!btn) return;
+    btn.hidden = !state.usersList.length || !state.usersHasMore;
+    btn.disabled = Boolean(state.usersLoadingMore);
+    btn.textContent = state.usersLoadingMore ? "Loading…" : "Load next 100";
   };
 
   const paint = () => {
-    const items = state.usersList;
-    updateCount();
-    if (!items.length) {
-      disconnect();
+    updatePager();
+    if (!state.usersList.length) {
       document.getElementById("user-table").innerHTML = idleGet(
         "Users not loaded",
-        "Get the first page immediately. More users load as you scroll.",
+        "Get the first 100 users. Use Load next 100 for more pages.",
         "user-get",
       );
       document.getElementById("user-get")?.addEventListener("click", () => load().catch((e) => toast(e.message, "error")));
       return;
     }
     document.getElementById("user-table").innerHTML = `
-      <div class="table-wrap lazy-scroll" id="user-scroll">
+      <div class="table-wrap">
         <table>
           <thead><tr><th>Name</th><th>Email</th><th>Location</th><th>Number</th><th>Status</th></tr></thead>
-          <tbody id="user-body">${items.map(userRow).join("")}</tbody>
+          <tbody id="user-body">${state.usersList.map(userRow).join("")}</tbody>
         </table>
-        <div class="lazy-sentinel" id="user-sentinel">${state.usersHasMore ? "Scroll to load more" : "All loaded users are shown"}</div>
       </div>`;
     bindRows(document.getElementById("user-table"));
-    bindSentinel();
   };
 
   const mergeUsers = (batch) => {
@@ -566,8 +548,7 @@ async function renderUsers(content, actions) {
   const loadMore = async () => {
     if (!state.usersHasMore || state.usersLoadingMore) return;
     state.usersLoadingMore = true;
-    const sentinel = document.getElementById("user-sentinel");
-    if (sentinel) sentinel.textContent = "Loading more…";
+    updatePager();
     try {
       const page = await api.listPeoplePage({
         ...state.usersQuery,
@@ -585,11 +566,9 @@ async function renderUsers(content, actions) {
         extra.forEach((p) => tbody.insertAdjacentHTML("beforeend", userRow(p)));
         bindRows(tbody);
       }
-      updateCount();
-      if (sentinel) sentinel.textContent = state.usersHasMore ? "Scroll to load more" : "All loaded users are shown";
-      if (!state.usersHasMore) disconnect();
     } finally {
       state.usersLoadingMore = false;
+      updatePager();
     }
   };
 
@@ -602,9 +581,9 @@ async function renderUsers(content, actions) {
     if (locationId) query.locationId = locationId;
     state.usersQuery = query;
     state.usersNext = null;
-    state.usersHasMore = true;
-    document.getElementById("user-table").innerHTML = spinner("Loading first page…");
-    document.getElementById("user-count").textContent = "";
+    state.usersHasMore = false;
+    document.getElementById("user-table").innerHTML = spinner("Loading first 100…");
+    updatePager();
     const page = await api.listPeoplePage(query);
     state.usersList = [];
     mergeUsers(page.items);
@@ -613,6 +592,7 @@ async function renderUsers(content, actions) {
     setSnapshot("users", state.usersList.length);
     if (!state.usersList.length) {
       document.getElementById("user-table").innerHTML = emptyState("No users", "Try a different search, or provision a new calling user.");
+      updatePager();
       return;
     }
     paint();
@@ -620,6 +600,7 @@ async function renderUsers(content, actions) {
 
   paint();
   document.getElementById("user-go").onclick = () => load().catch((e) => toast(e.message, "error"));
+  document.getElementById("user-more").onclick = () => loadMore().catch((e) => toast(e.message, "error"));
   document.getElementById("user-search").addEventListener("keydown", (e) => {
     if (e.key === "Enter") load().catch((err) => toast(err.message, "error"));
   });
