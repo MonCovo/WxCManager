@@ -180,6 +180,11 @@ export function createClient(getToken) {
     createDeviceByMac: (body) => post("/devices", body),
     activationCode: (body) => post("/devices/activationCode", body),
     supportedDevices: (orgId) => get("/telephony/config/supporteddevices", { orgId }),
+    listLineKeyTemplates: (orgId) => get("/telephony/config/devices/lineKeyTemplates", { orgId }),
+    getLineKeyTemplate: (templateId, orgId) =>
+      get(`/telephony/config/devices/lineKeyTemplates/${encodeURIComponent(templateId)}`, { orgId }),
+    getDeviceLayout: (deviceId, orgId) =>
+      get(`/telephony/config/devices/${encodeURIComponent(deviceId)}/layout`, { orgId }),
 
     listWorkspaces: (query) => get("/workspaces", { max: 100, ...query }),
     getWorkspace: (id) => get(`/workspaces/${id}`),

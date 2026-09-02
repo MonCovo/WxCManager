@@ -1,4 +1,4 @@
-import { createClient, onLog, getLogs, clearLogs } from "./api.js";
+import { createClient, onLog, getLogs, clearLogs } from "./api.js?v=20260902b";
 import {
   escapeHtml,
   toast,
@@ -31,10 +31,12 @@ const state = {
   locations: [],
   licenses: [],
   supportedDevices: [],
+  lineKeyTemplates: [],
   fetched: {
     locations: false,
     licenses: false,
     supportedDevices: false,
+    lineKeyTemplates: false,
   },
   snapshot: {},
   usersList: [],
@@ -76,7 +78,8 @@ function clearOrgData() {
   state.locations = [];
   state.licenses = [];
   state.supportedDevices = [];
-  state.fetched = { locations: false, licenses: false, supportedDevices: false };
+  state.lineKeyTemplates = [];
+  state.fetched = { locations: false, licenses: false, supportedDevices: false, lineKeyTemplates: false };
   state.snapshot = {};
   state.usersList = [];
   state.usersNext = null;
@@ -138,6 +141,24 @@ async function fetchSupportedDevices() {
   state.supportedDevices = devices.data.devices || devices.data.items || [];
   state.fetched.supportedDevices = true;
   return state.supportedDevices;
+}
+
+async function ensureLineKeyTemplates() {
+  if (state.fetched.lineKeyTemplates) return state.lineKeyTemplates;
+  const { data } = await api.listLineKeyTemplates(state.orgId);
+  const summaries = data.lineKeyTemplates || data.items || [];
+  const detailed = [];
+  for (const template of summaries) {
+    try {
+      const res = await api.getLineKeyTemplate(template.id, state.orgId);
+      detailed.push({ ...template, ...res.data });
+    } catch {
+      detailed.push(template);
+    }
+  }
+  state.lineKeyTemplates = detailed;
+  state.fetched.lineKeyTemplates = true;
+  return detailed;
 }
 
 function setSnapshot(key, count, error) {
@@ -747,6 +768,8 @@ async function renderUser(content, actions, id) {
     api.personCallWaiting(id).catch(() => ({ data: null })),
     api.personVoicemail(id).catch(() => ({ data: null })),
   ]);
+  const userDevices = devices.data.items || [];
+  await attachDeviceTemplates(userDevices).catch(() => {});
 
   const primary = numbers.data?.primary || numbers.data || {};
   content.innerHTML = `
@@ -796,7 +819,7 @@ async function renderUser(content, actions, id) {
         <span class="spacer"></span>
         <button class="btn btn-primary" id="add-user-device">Add device</button>
       </div>
-      ${deviceTable(devices.data.items || [])}
+      ${deviceTable(userDevices)}
     </section>
   `;
 
@@ -891,10 +914,110 @@ function licenseBoxesForPerson(person) {
     .join("");
 }
 
+function layoutFingerprint(keys = []) {
+  return JSON.stringify(
+    [...keys]
+      .sort((a, b) => (a.lineKeyIndex || 0) - (b.lineKeyIndex || 0))
+      .map((k) => [
+        k.lineKeyIndex,
+        k.lineKeyType,
+        k.lineKeyLabel || "",
+        k.lineKeyValue || "",
+        k.sharedLineIndex || "",
+      ]),
+  );
+}
+
+function modelsMatch(device, template) {
+  const product = (device.product || device.model || "").toLowerCase().trim();
+  const display = (template.modelDisplayName || "").toLowerCase().trim();
+  const model = (template.deviceModel || "").toLowerCase().replace(/^dms\s+/, "").trim();
+  if (!product) return true;
+  if (display && (product === display || product.includes(display) || display.includes(product))) return true;
+  if (model && (product === model || product.includes(model) || model.includes(product))) return true;
+  return false;
+}
+
+function matchLineKeyTemplate(device, layout, templates) {
+  if (!layout) return { text: "—", kind: "" };
+  if (String(layout.layoutMode || "").toUpperCase() === "DEFAULT") return { text: "None", kind: "" };
+  const fingerprint = layoutFingerprint(layout.lineKeys);
+  const keyed = templates.filter((t) => t.lineKeys?.length && layoutFingerprint(t.lineKeys) === fingerprint);
+  const named = keyed.filter((t) => modelsMatch(device, t));
+  const hit = named[0] || (keyed.length === 1 ? keyed[0] : null);
+  if (hit?.templateName) return { text: hit.templateName, kind: "ok" };
+  return { text: "Custom", kind: "warn" };
+}
+
+function templateBadge(info) {
+  if (!info || info.text === "—") return "—";
+  if (info.text === "None") return badge("None");
+  if (info.kind === "ok") return badge(info.text, "ok");
+  if (info.kind === "warn") return badge(info.text, "warn");
+  return escapeHtml(info.text);
+}
+
+function callingDeviceIds(device) {
+  const ids = [];
+  if (device.callingId) ids.push(device.callingId);
+  if (device.id && device.id !== device.callingId) ids.push(device.id);
+  return ids;
+}
+
+async function getDeviceLayoutSafe(device) {
+  const type = String(device.type || device.productType || "").toLowerCase();
+  if (["accessory", "webexgo", "telepresence"].includes(type)) return null;
+  const ids = callingDeviceIds(device);
+  for (let i = 0; i < ids.length; i++) {
+    try {
+      const { data } = await api.getDeviceLayout(ids[i], state.orgId);
+      return data;
+    } catch (err) {
+      if ((err.status === 404 || err.status === 400) && i < ids.length - 1) continue;
+      if (err.status === 404 || err.status === 400) return null;
+      throw err;
+    }
+  }
+  return null;
+}
+
+async function mapPool(items, limit, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const idx = next++;
+      out[idx] = await fn(items[idx], idx);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
+
+async function attachDeviceTemplates(items, { onDevice } = {}) {
+  if (!items.length) return items;
+  let templates = [];
+  try {
+    templates = await ensureLineKeyTemplates();
+  } catch {
+    templates = [];
+  }
+  await mapPool(items, 5, async (device) => {
+    try {
+      const layout = await getDeviceLayoutSafe(device);
+      device.templateInfo = matchLineKeyTemplate(device, layout, templates);
+    } catch {
+      device.templateInfo = { text: "—", kind: "" };
+    }
+    onDevice?.(device);
+  });
+  return items;
+}
+
 function deviceTable(items) {
   if (!items.length) return emptyState("No devices", "Add a phone by MAC address or generate an activation code.");
   return `<div class="table-wrap"><table>
-    <thead><tr><th>Name</th><th>Product</th><th>MAC</th><th>Owner</th><th>Status</th><th></th></tr></thead>
+    <thead><tr><th>Name</th><th>Product</th><th>MAC</th><th>Owner</th><th>Status</th><th>Line key template</th><th></th></tr></thead>
     <tbody>${items.map((d) => `
       <tr>
         <td>${escapeHtml(d.displayName || d.product || "Device")}</td>
@@ -902,6 +1025,7 @@ function deviceTable(items) {
         <td class="mono">${escapeHtml(d.mac || "—")}</td>
         <td>${escapeHtml(d.personDisplayName || d.workspaceName || ownerLabel(d))}</td>
         <td>${statusBadge(d.connectionStatus)}</td>
+        <td data-template-cell="${escapeHtml(d.id)}">${d.templateInfo ? templateBadge(d.templateInfo) : `<span class="muted">Checking…</span>`}</td>
         <td><button class="btn btn-ghost" data-del-device="${escapeHtml(d.id)}">Remove</button></td>
       </tr>`).join("")}</tbody>
   </table></div>`;
@@ -1018,7 +1142,9 @@ async function renderDevices(content, actions) {
     </div>
     <div id="dev-table">${idleGet("Devices not loaded", "Click Get to request devices for this organization.", "dev-get")}</div>
   `;
+  let loadSeq = 0;
   const load = async () => {
+    const seq = ++loadSeq;
     const search = document.getElementById("dev-search").value.trim();
     const query = { orgId: state.orgId, max: 100 };
     if (document.getElementById("dev-type").value) query.productType = document.getElementById("dev-type").value;
@@ -1027,9 +1153,18 @@ async function renderDevices(content, actions) {
     else if (search) query.displayName = search;
     document.getElementById("dev-table").innerHTML = spinner();
     const { data } = await api.listDevices(query);
-    setSnapshot("devices", (data.items || []).length);
-    document.getElementById("dev-table").innerHTML = deviceTable(data.items || []);
+    const items = data.items || [];
+    setSnapshot("devices", items.length);
+    if (seq !== loadSeq) return;
+    document.getElementById("dev-table").innerHTML = deviceTable(items);
     bindDeviceRows();
+    await attachDeviceTemplates(items, {
+      onDevice: (device) => {
+        if (seq !== loadSeq || !device.id) return;
+        const cell = document.querySelector(`[data-template-cell="${CSS.escape(device.id)}"]`);
+        if (cell) cell.innerHTML = templateBadge(device.templateInfo);
+      },
+    });
   };
   document.getElementById("dev-go").onclick = () => load().catch((e) => toast(e.message, "error"));
   document.getElementById("dev-get")?.addEventListener("click", () => load().catch((e) => toast(e.message, "error")));
