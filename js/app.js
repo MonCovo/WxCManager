@@ -1,4 +1,4 @@
-import { createClient, onLog, getLogs, clearLogs } from "./api.js?v=20260902b";
+import { createClient, onLog, getLogs, clearLogs } from "./api.js?v=20260902c";
 import {
   escapeHtml,
   toast,
@@ -904,7 +904,7 @@ async function renderUser(content, actions, id) {
       toast(err.message, "error");
     }
   };
-  bindDeviceRows();
+  bindDeviceRows(userDevices);
 }
 
 function licenseBoxesForPerson(person) {
@@ -945,7 +945,7 @@ function matchLineKeyTemplate(device, layout, templates) {
   const keyed = templates.filter((t) => t.lineKeys?.length && layoutFingerprint(t.lineKeys) === fingerprint);
   const named = keyed.filter((t) => modelsMatch(device, t));
   const hit = named[0] || (keyed.length === 1 ? keyed[0] : null);
-  if (hit?.templateName) return { text: hit.templateName, kind: "ok" };
+  if (hit?.templateName) return { text: hit.templateName, kind: "ok", templateId: hit.id };
   return { text: "Custom", kind: "warn" };
 }
 
@@ -971,6 +971,8 @@ async function getDeviceLayoutSafe(device) {
   for (let i = 0; i < ids.length; i++) {
     try {
       const { data } = await api.getDeviceLayout(ids[i], state.orgId);
+      device.layoutId = ids[i];
+      device.layout = data;
       return data;
     } catch (err) {
       if ((err.status === 404 || err.status === 400) && i < ids.length - 1) continue;
@@ -979,6 +981,63 @@ async function getDeviceLayoutSafe(device) {
     }
   }
   return null;
+}
+
+function lineKeyPayload(keys = []) {
+  return keys.map((k) => {
+    const row = { lineKeyIndex: k.lineKeyIndex, lineKeyType: k.lineKeyType };
+    if (k.lineKeyLabel) row.lineKeyLabel = k.lineKeyLabel;
+    if (k.lineKeyValue != null && k.lineKeyValue !== "") row.lineKeyValue = k.lineKeyValue;
+    if (k.lineKeyType === "SHARED_LINE" && k.sharedLineIndex) row.sharedLineIndex = k.sharedLineIndex;
+    return row;
+  }).filter((k) => k.lineKeyIndex && k.lineKeyType);
+}
+
+function layoutFromTemplate(template) {
+  const body = {
+    layoutMode: "CUSTOM",
+    userReorderEnabled: Boolean(template.userReorderEnabled),
+    lineKeys: lineKeyPayload(template.lineKeys),
+  };
+  if (template.kemModuleType) body.kemModuleType = template.kemModuleType;
+  if (template.kemKeys?.length) body.kemKeys = template.kemKeys;
+  return body;
+}
+
+async function updateDeviceLayoutSafe(device, body) {
+  const seen = new Set();
+  const ids = [device.layoutId, ...callingDeviceIds(device)].filter((id) => id && !seen.has(id) && seen.add(id));
+  let lastErr;
+  for (const id of ids) {
+    try {
+      await api.updateDeviceLayout(id, body, state.orgId);
+      device.layoutId = id;
+      return;
+    } catch (err) {
+      lastErr = err;
+      if (err.status === 404) continue;
+      throw err;
+    }
+  }
+  throw lastErr || new Error("Could not update the device layout.");
+}
+
+function paintTemplateCell(device) {
+  if (!device?.id) return;
+  const cell = document.querySelector(`[data-template-cell="${CSS.escape(device.id)}"]`);
+  if (cell) cell.innerHTML = templateBadge(device.templateInfo);
+  const btn = document.querySelector(`[data-tpl-device="${CSS.escape(device.id)}"]`);
+  if (btn) btn.hidden = device.templateInfo?.text === "—";
+}
+
+async function refreshDeviceTemplate(device) {
+  try {
+    const layout = await getDeviceLayoutSafe(device);
+    device.templateInfo = matchLineKeyTemplate(device, layout, state.lineKeyTemplates);
+  } catch {
+    device.templateInfo = { text: "—", kind: "" };
+  }
+  paintTemplateCell(device);
 }
 
 async function mapPool(items, limit, fn) {
@@ -1026,7 +1085,10 @@ function deviceTable(items) {
         <td>${escapeHtml(d.personDisplayName || d.workspaceName || ownerLabel(d))}</td>
         <td>${statusBadge(d.connectionStatus)}</td>
         <td data-template-cell="${escapeHtml(d.id)}">${d.templateInfo ? templateBadge(d.templateInfo) : `<span class="muted">Checking…</span>`}</td>
-        <td><button class="btn btn-ghost" data-del-device="${escapeHtml(d.id)}">Remove</button></td>
+        <td class="row-actions">
+          <button type="button" class="btn btn-ghost" data-tpl-device="${escapeHtml(d.id)}" ${d.templateInfo?.text === "—" ? "hidden" : ""}>Template</button>
+          <button type="button" class="btn btn-ghost" data-del-device="${escapeHtml(d.id)}">Remove</button>
+        </td>
       </tr>`).join("")}</tbody>
   </table></div>`;
 }
@@ -1039,7 +1101,15 @@ function statusBadge(status) {
   return badge(status || "Unknown");
 }
 
-function bindDeviceRows() {
+function bindDeviceRows(items = []) {
+  const byId = new Map(items.map((d) => [d.id, d]));
+  document.querySelectorAll("[data-tpl-device]").forEach((btn) => {
+    btn.onclick = () => {
+      const device = byId.get(btn.dataset.tplDevice);
+      if (!device) return;
+      showAssignTemplate(device).catch((err) => toast(err.message, "error"));
+    };
+  });
   document.querySelectorAll("[data-del-device]").forEach((btn) => {
     btn.onclick = async () => {
       if (!(await confirmAction("Remove device", "Delete this device from Webex Calling?"))) return;
@@ -1051,6 +1121,66 @@ function bindDeviceRows() {
         toast(err.message, "error");
       }
     };
+  });
+}
+
+async function showAssignTemplate(device) {
+  if (!device.layout && !device.layoutId) {
+    const layout = await getDeviceLayoutSafe(device);
+    if (layout) device.templateInfo = matchLineKeyTemplate(device, layout, state.lineKeyTemplates || []);
+  }
+  if (!device.layoutId) {
+    throw new Error("This device does not support line key templates.");
+  }
+  const templates = await ensureLineKeyTemplates();
+  const forModel = templates.filter((t) => t.lineKeys?.length && modelsMatch(device, t));
+  const currentId = device.templateInfo?.templateId || "";
+  const isCustom = device.templateInfo?.kind === "warn";
+  const name = device.displayName || device.product || "Device";
+  const options = [
+    `<option value="">None (default layout)</option>`,
+    isCustom ? `<option value="__custom__" selected>Custom layout (current)</option>` : "",
+    ...forModel.map((t) =>
+      `<option value="${escapeHtml(t.id)}" ${t.id === currentId ? "selected" : ""}>${escapeHtml(t.templateName)}</option>`),
+  ].join("");
+
+  openModal({
+    title: "Line key template",
+    confirmLabel: "Apply",
+    body: `
+      <p class="muted">${escapeHtml(name)}${device.product ? ` · ${escapeHtml(device.product)}` : ""}</p>
+      ${forModel.length ? "" : `<p class="muted">No line key templates exist for this model. You can still reset to the default layout.</p>`}
+      <div class="field">
+        <label>Template</label>
+        <select name="templateId">${options}</select>
+      </div>
+    `,
+    onConfirm: async (modal) => {
+      const templateId = formValue(modal, "templateId");
+      if (templateId === "__custom__") return;
+      if (templateId && templateId === currentId) return;
+      if (!templateId && device.templateInfo?.text === "None") return;
+      if (!templateId) {
+        await updateDeviceLayoutSafe(device, {
+          layoutMode: "DEFAULT",
+          lineKeys: [{ lineKeyIndex: 1, lineKeyType: "PRIMARY_LINE" }],
+        });
+        device.templateInfo = { text: "None", kind: "" };
+        paintTemplateCell(device);
+        toast("Default layout applied");
+      } else {
+        let template = templates.find((t) => t.id === templateId);
+        if (!template?.lineKeys?.length) {
+          template = { ...template, ...(await api.getLineKeyTemplate(templateId, state.orgId)).data };
+        }
+        if (!template?.lineKeys?.length) throw new Error("That template has no line keys to apply.");
+        await updateDeviceLayoutSafe(device, layoutFromTemplate(template));
+        device.templateInfo = { text: template.templateName, kind: "ok", templateId: template.id };
+        paintTemplateCell(device);
+        toast(`Applied ${template.templateName}`);
+      }
+      refreshDeviceTemplate(device).catch(() => {});
+    },
   });
 }
 
@@ -1157,12 +1287,11 @@ async function renderDevices(content, actions) {
     setSnapshot("devices", items.length);
     if (seq !== loadSeq) return;
     document.getElementById("dev-table").innerHTML = deviceTable(items);
-    bindDeviceRows();
+    bindDeviceRows(items);
     await attachDeviceTemplates(items, {
       onDevice: (device) => {
-        if (seq !== loadSeq || !device.id) return;
-        const cell = document.querySelector(`[data-template-cell="${CSS.escape(device.id)}"]`);
-        if (cell) cell.innerHTML = templateBadge(device.templateInfo);
+        if (seq !== loadSeq) return;
+        paintTemplateCell(device);
       },
     });
   };

@@ -185,6 +185,8 @@ export function createClient(getToken) {
       get(`/telephony/config/devices/lineKeyTemplates/${encodeURIComponent(templateId)}`, { orgId }),
     getDeviceLayout: (deviceId, orgId) =>
       get(`/telephony/config/devices/${encodeURIComponent(deviceId)}/layout`, { orgId }),
+    updateDeviceLayout: (deviceId, body, orgId) =>
+      put(`/telephony/config/devices/${encodeURIComponent(deviceId)}/layout`, body, { orgId }),
 
     listWorkspaces: (query) => get("/workspaces", { max: 100, ...query }),
     getWorkspace: (id) => get(`/workspaces/${id}`),

@@ -236,6 +236,12 @@ input:focus, select:focus, textarea:focus {
   border-color: transparent;
 }
 .btn-ghost { background: transparent; }
+.row-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
 .btn-block { width: 100%; }
 .icon-btn {
   background: transparent;
